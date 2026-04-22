@@ -60,6 +60,13 @@ function formatSkyTrack(sat) {
   return `${start}->${end}`;
 }
 
+function getLikelihoodFeedback(likelihood) {
+  if (likelihood >= 75) return 'They can probably see you';
+  if (likelihood >= 50) return 'There is a decent chance they can see you';
+  if (likelihood >= 25) return 'There is a small chance they can see you';
+  return 'They probably cannot see you';
+}
+
 function renderNextPass(result, minsLeft = result?.minutesAway ?? null) {
   if (!result) {
     elNextPass.textContent = 'No pass in 24h';
@@ -193,14 +200,15 @@ function refresh(observerGd) {
     likelihood >= 25 ? 'likelihood-guarded' :
                        'likelihood-low';
   elLikelihood.className = likelihoodClass;
+  const likelihoodFeedback = getLikelihoodFeedback(likelihood);
 
   const daylightLabel = solarElev > 0 ? 'daytime' : solarElev > -6 ? 'civil twilight' : 'nighttime';
   if (inFOV.length === 0) {
-    elDaylightStatus.textContent = `${daylightLabel}  |  no satellites within imaging swath`;
+    elDaylightStatus.textContent = `${likelihoodFeedback}  |  ${daylightLabel}  |  no satellites within imaging swath`;
   } else if (solarElev <= -6) {
-    elDaylightStatus.textContent = `nighttime  |  optical imaging unlikely  |  SAR satellites unaffected`;
+    elDaylightStatus.textContent = `${likelihoodFeedback}  |  nighttime  |  optical imaging unlikely  |  SAR satellites unaffected`;
   } else {
-    elDaylightStatus.textContent = `${daylightLabel}  |  ${inFOV.length} satellite${inFOV.length !== 1 ? 's' : ''} within imaging swath`;
+    elDaylightStatus.textContent = `${likelihoodFeedback}  |  ${daylightLabel}  |  ${inFOV.length} satellite${inFOV.length !== 1 ? 's' : ''} within imaging swath`;
   }
 
   // Update next-pass countdown every tick using elapsed time since last computation

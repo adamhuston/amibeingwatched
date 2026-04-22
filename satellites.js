@@ -306,10 +306,10 @@ export function observationLikelihood(overhead, solarElevationDeg) {
 
   const geometricScore = 1 - Math.exp(-1.8 * exposure);
 
-  // Daylight factor: optical sensors need sunlight, but we never suppress to 0.
-  // Floor at 0.2 — SAR satellites (Capella, ICEYE, Umbra) operate at night,
-  // and tasking schedules for any satellite are unknown to us.
-  const daylightFactor = Math.max(0.2, Math.min(1, (solarElevationDeg + 12) / 6));
+  // Daylight factor: optical sensors need sunlight, but we keep the night penalty soft.
+  // Floor at 0.55 — some satellites may have low-light or non-optical capability,
+  // and we intentionally avoid making nighttime feel categorically safe.
+  const daylightFactor = Math.max(0.55, Math.min(1, (solarElevationDeg + 18) / 18));
 
   return Math.min(99, Math.round(geometricScore * daylightFactor * 100));
 }
