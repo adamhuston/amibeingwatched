@@ -133,7 +133,11 @@ async function run() {
     console.error('[app] loadImagingSatellites threw:', err);
     document.body.classList.remove('loading');
     elRetryBtn.style.display = 'inline-block';
-    showError('Failed to load satellite data. Check your connection and reload.');
+    showError(
+      err?.message?.includes('bundled fallback snapshot')
+        ? 'Live satellite data could not be reached, and no local fallback snapshot is bundled with this build.'
+        : 'Failed to load satellite data. Check your connection and reload.'
+    );
     return;
   }
   showStatus('');

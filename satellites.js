@@ -2,6 +2,7 @@
 import * as satellite from 'https://cdn.jsdelivr.net/npm/satellite.js@7.0.0/+esm';
 
 const CELESTRAK_BASE        = 'https://celestrak.org/NORAD/elements/gp.php';
+const FALLBACK_SNAPSHOT_URL = './satellites-fallback.json';
 const CACHE_TTL_MS          = 2 * 60 * 60 * 1000; // 2 hours — CelesTrak enforced rate limit
 const R_EARTH_KM            = 6371;
 const MU_KM3_S2             = 398600.4418;          // Earth gravitational parameter km³/s²
@@ -134,6 +135,21 @@ async function loadGroupSet(groups) {
   return { loadedGroups, failedGroups };
 }
 
+async function loadBundledFallbackSnapshot() {
+  try {
+    const res = await fetch(FALLBACK_SNAPSHOT_URL, { cache: 'no-store' });
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+
+    console.warn(`[satellites] using bundled fallback snapshot from ${FALLBACK_SNAPSHOT_URL}`);
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
  * Load all imaging satellite OMM records from CelesTrak.
  * Sources:
@@ -160,7 +176,10 @@ export async function loadImagingSatellites() {
   }
 
   if (regularResults.length === 0 && probableResults.length === 0) {
-    throw new Error('All satellite groups were unavailable');
+    const fallbackSnapshot = await loadBundledFallbackSnapshot();
+    if (fallbackSnapshot) return fallbackSnapshot;
+
+    throw new Error('All satellite groups were unavailable and no bundled fallback snapshot was found');
   }
 
   const seen = new Set();
