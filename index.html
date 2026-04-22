@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Satellite Overhead</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0a0a1a">
+  <meta name="description" content="How many imaging satellites are overhead right now?">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="./style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Jersey+20&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app-title">Satellite Overhead</div>
+  <div id="app-header">Am I Being Watched?</div>
+
+  <div id="location">Acquiring location…</div>
+  <div id="status"></div>
+  <div id="error"></div>
+  <button class="btn" id="retry-btn" style="display:none; margin-top:0.5rem; border-color:#ff5555; color:#ff5555;">Try again</button>
+
+  <div class="stat">
+    <div class="value"><span id="imaging-count">—</span></div>
+    <div class="label">imaging satellites above horizon</div>
+  </div>
+
+  <div class="breakdown-stats">
+    <div class="breakdown-stat" id="fov-stat">
+      <div class="value"><span id="in-fov">—</span></div>
+      <div class="label">in imaging range</div>
+    </div>
+    <div class="breakdown-stat" id="near-stat">
+      <div class="value"><span id="nearby">—</span></div>
+      <div class="label">nearby (&gt;25°)</div>
+    </div>
+  </div>
+
+  <div class="stat secondary">
+    <div class="value"><span id="likelihood">—</span></div>
+    <div class="label">observation likelihood</div>
+    <div class="sublabel" id="daylight-status">—</div>
+  </div>
+
+  <div class="stat secondary">
+    <div class="value"><span id="next-pass">—</span></div>
+    
+    <div class="label">next overhead pass
+      <div class="sublabel" id="next-pass-meta">—</div>
+    </div>
+  </div>
+
+  <div>
+    <button class="btn" id="notify-btn">Enable overhead alerts</button>
+    <button class="btn" id="install-btn">Install App</button>
+  </div>
+
+  <details id="sat-list">
+    <summary>▸ <span id="sat-list-count">—</span> visible + next pass · expand</summary>
+    <table id="sat-table">
+      <thead>
+        <tr>
+          <th>satellite</th>
+          <th>elev/time</th>
+          <th>status</th>
+          <th>bearing</th>
+          <th>skytrack</th>
+        </tr>
+      </thead>
+      <tbody id="sat-tbody"></tbody>
+    </table>
+  </details>
+
+  <footer>
+    <div>Tracking <span id="total-tracked">—</span> imaging-capable satellites · <span id="confirmed-tracked">—</span> confirmed · <span id="probable-tracked">—</span> probable by orbit</div>
+    <div>Does not include classified satellites.</div>
+    <div>Imaging range = nadir angle &lt; 30°. Likelihood model assumes optical sensors only.</div>
+  </footer>
+
+  <!--
+    Two separate type="module" scripts:
+    - app.js runs the main logic and exports requestNotifications
+    - The inline script wires the notify button to that export
+    Both share the same module cache, so the import below reuses the already-loaded module.
+  -->
+  <script type="module" src="app.js"></script>
+  <script type="module">
+    import { requestNotifications } from './app.js';
+    document.getElementById('notify-btn').addEventListener('click', requestNotifications);
+  </script>
+
+  <script>
+    // PWA install prompt — fires only when browser criteria are met
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', e => {
+      e.preventDefault();
+      deferredPrompt = e;
+      document.getElementById('install-btn').style.display = 'inline-block';
+    });
+    document.getElementById('install-btn').addEventListener('click', () => {
+      if (deferredPrompt) deferredPrompt.prompt();
+    });
+    window.addEventListener('appinstalled', () => {
+      document.getElementById('install-btn').style.display = 'none';
+      deferredPrompt = null;
+    });
+
+    // Service worker registration
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {
+        // SW registration failing is non-fatal — app still works without offline support
+      });
+    }
+  </script>
+</body>
+</html>
