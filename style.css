@@ -5,7 +5,8 @@
 }
 
 body {
-  font-family: "Jersey 20", sans-serif;  background: #000;
+  background-color: #1e1e1e;
+  font-family: "Jersey 20", sans-serif;
   font-weight: 400;
   font-style: normal;
   color: #666;
@@ -16,7 +17,7 @@ body {
 }
 
 #app-title {
-  font-size: 0.8rem;
+  font-size: 1rem;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   margin-bottom: 0.4rem;
@@ -32,12 +33,13 @@ body {
 }
 
 #location {
-  font-size: 0.8rem;
+  font-size: 1rem;
   margin-bottom: 0.2rem;
+  color: #c6c6c6 ;
 }
 
 #status {
-  font-size: 0.8rem;
+  font-size: 1rem;
   color: #fff;
   margin-bottom: 1.75rem;
   min-height: 1.1rem;
@@ -75,10 +77,10 @@ body.loading footer span {
 .stat, .value {
   margin-bottom: 2rem;
   font-family: "Jersey 20", sans-serif;
-
 }
 
 .stat .value {
+  font-family: "Jersey 20", sans-serif;
   font-size: 4.5rem;
   line-height: 1;
   color: #fff;
@@ -87,7 +89,7 @@ body.loading footer span {
 }
 
 .stat .label {
-  font-size: 0.8rem;
+  font-size: 1rem;
   margin-top: 0.35rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -99,15 +101,15 @@ body.loading footer span {
 }
 
 .stat .sublabel {
-  font-size: 0.8rem;
   margin-top: 0.3rem;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   line-height: 1.5;
 }
 
-#next-pass-meta {
+.sublabel {
   color:#c6c6c6 !important;
+  font-size: 1rem;
 }
 
 /* ── Breakdown alert grid ── */
@@ -140,7 +142,7 @@ body.loading footer span {
 }
 
 .breakdown-stat .label {
-  font-size: 0.8rem;
+  font-size: 1rem;
   margin-top: 0.3rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -162,7 +164,7 @@ body.loading footer span {
   padding: 0.45rem 1rem;
   border-radius: 0;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 1rem;
   font-family: inherit;
   border: 1px solid;
   background: transparent;
@@ -195,7 +197,7 @@ details#sat-list {
 }
 
 details#sat-list summary {
-  font-size: 0.8rem;
+  font-size: 1rem;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   cursor: pointer;
