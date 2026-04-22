@@ -4,7 +4,8 @@ import * as satellite from 'https://cdn.jsdelivr.net/npm/satellite.js@7.0.0/+esm
 const STEP_SECONDS    = 60;       // 1-minute resolution — accurate enough for pass prediction
 const LOOKAHEAD_HOURS = 24;
 const MAX_CANDIDATES  = 50;       // limit CPU: check only the most-likely-to-rise satellites
-const NEXT_PASS_TRACK_OFFSET_STEPS = 3;
+const PASS_EDGE_STEP_SECONDS = 30;
+const MAX_PASS_DURATION_MINUTES = 120;
 
 function getLookAnglesDeg(satrec, observerGd, date) {
   const gmst   = satellite.gstime(date);
@@ -17,6 +18,22 @@ function getLookAnglesDeg(satrec, observerGd, date) {
     azimuthDeg: look.azimuth * (180 / Math.PI),
     elevationDeg: look.elevation * (180 / Math.PI),
   };
+}
+
+function computeSetAzimuthDeg(satrec, observerGd, riseDate) {
+  const maxSteps = Math.floor((MAX_PASS_DURATION_MINUTES * 60) / PASS_EDGE_STEP_SECONDS);
+  let previousLook = getLookAnglesDeg(satrec, observerGd, riseDate);
+  if (!previousLook) return null;
+
+  for (let i = 1; i <= maxSteps; i++) {
+    const t = new Date(riseDate.getTime() + i * PASS_EDGE_STEP_SECONDS * 1000);
+    const look = getLookAnglesDeg(satrec, observerGd, t);
+    if (!look) continue;
+    if (look.elevationDeg <= 0) return look.azimuthDeg;
+    previousLook = look;
+  }
+
+  return previousLook.azimuthDeg;
 }
 
 /**
@@ -83,11 +100,8 @@ export function findNextPass(sats, observerGd) {
               azimuthDeg: look.azimuth * (180 / Math.PI),
               elevationDeg: look.elevation * (180 / Math.PI),
             };
-            const trackLook = getLookAnglesDeg(
-              satrec,
-              observerGd,
-              new Date(now.getTime() + (i + NEXT_PASS_TRACK_OFFSET_STEPS) * STEP_SECONDS * 1000)
-            ) || riseLook;
+              const riseDate = t;
+              const setAzimuthDeg = computeSetAzimuthDeg(satrec, observerGd, riseDate);
             earliest = {
               name: omm.OBJECT_NAME,
               noradId: omm.NORAD_CAT_ID,
@@ -95,7 +109,7 @@ export function findNextPass(sats, observerGd) {
               minutesAway: Math.round(minutesAway),
               trend: 'rising',
               trackStartAzimuthDeg: riseLook.azimuthDeg,
-              trackEndAzimuthDeg: trackLook.azimuthDeg,
+                trackEndAzimuthDeg: setAzimuthDeg ?? riseLook.azimuthDeg,
             };
           }
           break; // earliest pass for this satellite found; move on

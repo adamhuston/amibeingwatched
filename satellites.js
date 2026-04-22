@@ -9,6 +9,11 @@ const MU_KM3_S2             = 398600.4418;          // Earth gravitational param
 const FOV_HALF_ANGLE_DEG  = 30;  // max off-nadir for typical imaging satellite
 const NEARBY_ELEVATION_DEG = 25; // elevation above which a satellite is considered "nearby" (~30-40 min before imaging range)
 const MOTION_SAMPLE_SECONDS = 30;
+const PASS_EDGE_STEP_SECONDS = 30;
+const MAX_PASS_DURATION_MINUTES = 120;
+const PASS_EDGE_CACHE_FALLBACK_TTL_MS = 60 * 1000;
+
+const passEdgeCache = new Map();
 
 // Named imaging operators — CelesTrak regular catalog
 const IMAGING_GROUPS      = ['resource', 'planet', 'DMC'];
@@ -117,6 +122,55 @@ function getMotionMetadata(satrec, observerGd, now, currentLook) {
   };
 }
 
+function computeCurrentPassEdgeAzimuths(satrec, observerGd, now, lookNow) {
+  const maxSteps = Math.floor((MAX_PASS_DURATION_MINUTES * 60) / PASS_EDGE_STEP_SECONDS);
+  let riseAzimuthDeg = lookNow.azimuthDeg;
+  let setAzimuthDeg = lookNow.azimuthDeg;
+  let setTimeMs = now.getTime() + PASS_EDGE_CACHE_FALLBACK_TTL_MS;
+
+  let previousAbove = lookNow;
+  for (let i = 1; i <= maxSteps; i++) {
+    const t = new Date(now.getTime() - i * PASS_EDGE_STEP_SECONDS * 1000);
+    const look = getLookAnglesDeg(satrec, observerGd, t);
+    if (!look) continue;
+    if (look.elevationDeg <= 0) {
+      riseAzimuthDeg = previousAbove.azimuthDeg;
+      break;
+    }
+    previousAbove = look;
+    riseAzimuthDeg = look.azimuthDeg;
+  }
+
+  let latestLook = lookNow;
+  for (let i = 1; i <= maxSteps; i++) {
+    const t = new Date(now.getTime() + i * PASS_EDGE_STEP_SECONDS * 1000);
+    const look = getLookAnglesDeg(satrec, observerGd, t);
+    if (!look) continue;
+    if (look.elevationDeg <= 0) {
+      setAzimuthDeg = look.azimuthDeg;
+      setTimeMs = t.getTime();
+      break;
+    }
+    latestLook = look;
+    setAzimuthDeg = look.azimuthDeg;
+    setTimeMs = t.getTime() + PASS_EDGE_CACHE_FALLBACK_TTL_MS;
+  }
+
+  if (!Number.isFinite(setAzimuthDeg)) setAzimuthDeg = latestLook.azimuthDeg;
+
+  return { riseAzimuthDeg, setAzimuthDeg, setTimeMs };
+}
+
+function getCachedPassEdges(noradId, nowMs) {
+  const cached = passEdgeCache.get(noradId);
+  if (!cached) return null;
+  if (cached.validUntilMs <= nowMs) {
+    passEdgeCache.delete(noradId);
+    return null;
+  }
+  return cached;
+}
+
 async function loadGroupSet(groups) {
   const settled = await Promise.allSettled(groups.map(group => fetchGroup(group, CELESTRAK_BASE, 'GROUP')));
   const loadedGroups = [];
@@ -218,6 +272,7 @@ export async function loadImagingSatellites() {
  */
 export function getOverheadSatellites(sats, observerGd) {
   const now    = new Date();
+  const nowMs = now.getTime();
   const overhead = [];
 
   for (const omm of sats) {
@@ -230,6 +285,15 @@ export function getOverheadSatellites(sats, observerGd) {
       const altitudeKm = distKm - R_EARTH_KM;
       const elevationRad = lookNow.elevationDeg * (Math.PI / 180);
       const motion = getMotionMetadata(satrec, observerGd, now, lookNow);
+      let passEdges = getCachedPassEdges(omm.NORAD_CAT_ID, nowMs);
+      if (!passEdges) {
+        passEdges = computeCurrentPassEdgeAzimuths(satrec, observerGd, now, lookNow);
+        passEdgeCache.set(omm.NORAD_CAT_ID, {
+          riseAzimuthDeg: passEdges.riseAzimuthDeg,
+          setAzimuthDeg: passEdges.setAzimuthDeg,
+          validUntilMs: passEdges.setTimeMs,
+        });
+      }
 
       // Off-nadir angle: angle from sub-satellite point to observer, measured at the satellite.
       // Derived from spherical Earth geometry: sin(θ) = R·cos(ε) / (R + h)
@@ -245,8 +309,8 @@ export function getOverheadSatellites(sats, observerGd) {
         altitudeKm,
         nadirAngleDeg,
         trend:            motion.trend,
-        trackStartAzimuthDeg: motion.trackStartAzimuthDeg,
-        trackEndAzimuthDeg: motion.trackEndAzimuthDeg,
+        trackStartAzimuthDeg: passEdges.riseAzimuthDeg,
+        trackEndAzimuthDeg: passEdges.setAzimuthDeg,
         inFOV:   nadirAngleDeg < FOV_HALF_ANGLE_DEG,
         nearby:  lookNow.elevationDeg > NEARBY_ELEVATION_DEG,
       });
