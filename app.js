@@ -3,7 +3,7 @@ import { loadImagingSatellites, getOverheadSatellites, observationLikelihood, ge
 import { findNextPass } from './passes.js';
 import * as satellite from 'https://cdn.jsdelivr.net/npm/satellite.js@7.0.0/+esm';
 
-const REFRESH_INTERVAL_MS  = 10_000; // re-check positions every 10 seconds
+const REFRESH_INTERVAL_MS  = 5_000; // re-check positions every 10 seconds
 const PASS_WARNING_MINS    = 5;      // fire "pass incoming" alert this many minutes ahead
 
 let notificationEnabled = false;
@@ -61,10 +61,13 @@ function formatSkyTrack(sat) {
 }
 
 function getLikelihoodFeedback(likelihood) {
-  if (likelihood >= 75) return 'They can probably see you';
-  if (likelihood >= 50) return 'There is a decent chance they can see you';
-  if (likelihood >= 25) return 'There is a small chance they can see you';
-  return 'They probably cannot see you';
+  if (likelihood >= 90) return 'Panic: they absolutely have line of sight.';
+  if (likelihood >= 75) return 'Very high chance they can see you right now.';
+  if (likelihood >= 60) return 'The odds are solidly in their favor.';
+  if (likelihood >= 45) return 'Fifty-shmifty. Could go either way.';
+  if (likelihood >= 30) return 'Honestly just keep your head down.';
+  if (likelihood >= 15) return 'Low chance they can see you.';
+  return 'All clear!';
 }
 
 function renderNextPass(result, minsLeft = result?.minutesAway ?? null) {
