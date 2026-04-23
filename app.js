@@ -5,6 +5,7 @@ import * as satellite from 'https://cdn.jsdelivr.net/npm/satellite.js@7.0.0/+esm
 
 const REFRESH_INTERVAL_MS  = 5_000; // re-check positions every 10 seconds
 const PASS_WARNING_MINS    = 5;      // fire "pass incoming" alert this many minutes ahead
+const ALERTS_PREF_KEY      = 'overhead_alerts_enabled';
 
 let notificationEnabled = false;
 let loadedSats          = [];   // cached after first load - OMM data, not positions
@@ -346,8 +347,22 @@ function renderSatTable(overhead) {
  */
 export function requestNotifications() {
   if (!('Notification' in window)) return;
+
+  if (Notification.permission === 'granted') {
+    notificationEnabled = !notificationEnabled;
+    saveNotificationPreference(notificationEnabled);
+    updateNotifyButton();
+    return;
+  }
+
+  if (Notification.permission === 'denied') {
+    updateNotifyButton();
+    return;
+  }
+
   Notification.requestPermission().then(perm => {
     notificationEnabled = perm === 'granted';
+    saveNotificationPreference(notificationEnabled);
     updateNotifyButton();
   });
 }
@@ -361,18 +376,39 @@ function syncNotificationState() {
     return;
   }
 
-  notificationEnabled = Notification.permission === 'granted';
+  if (Notification.permission === 'granted') {
+    const savedPref = localStorage.getItem(ALERTS_PREF_KEY);
+    notificationEnabled = savedPref === null ? true : savedPref === '1';
+  } else {
+    notificationEnabled = false;
+  }
   updateNotifyButton();
+}
+
+function saveNotificationPreference(enabled) {
+  try {
+    localStorage.setItem(ALERTS_PREF_KEY, enabled ? '1' : '0');
+  } catch (_) {
+    // localStorage is best-effort; alerts can still toggle for this session.
+  }
 }
 
 function updateNotifyButton() {
   if (!elNotifyBtn) return;
 
-  elNotifyBtn.textContent = notificationEnabled
-    ? 'Alerts enabled'
-    : Notification.permission === 'denied'
-      ? 'Alerts blocked'
+  if (Notification.permission === 'denied') {
+    elNotifyBtn.textContent = 'Alerts blocked';
+    return;
+  }
+
+  if (Notification.permission === 'granted') {
+    elNotifyBtn.textContent = notificationEnabled
+      ? 'Disable overhead alerts'
       : 'Enable overhead alerts';
+    return;
+  }
+
+  elNotifyBtn.textContent = 'Enable overhead alerts';
 }
 
 // LEVEL 1 - next overhead pass is within the warning window
