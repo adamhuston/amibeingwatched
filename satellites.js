@@ -6,8 +6,8 @@ const FALLBACK_SNAPSHOT_URL = './satellites-fallback.json';
 const CACHE_TTL_MS          = 2 * 60 * 60 * 1000; // 2 hours — CelesTrak enforced rate limit
 const R_EARTH_KM            = 6371;
 const MU_KM3_S2             = 398600.4418;          // Earth gravitational parameter km³/s²
-const FOV_HALF_ANGLE_DEG  = 30;  // max off-nadir for typical imaging satellite
-const NEARBY_ELEVATION_DEG = 25; // elevation above which a satellite is considered "nearby" (~30-40 min before imaging range)
+export const FOV_HALF_ANGLE_DEG  = 30;  // max off-nadir for typical imaging satellite
+export const NEARBY_ELEVATION_DEG = 25; // elevation above which a satellite is considered "nearby" (~30-40 min before imaging range)
 const MOTION_SAMPLE_SECONDS = 30;
 const PASS_EDGE_STEP_SECONDS = 30;
 const MAX_PASS_DURATION_MINUTES = 120;
@@ -189,6 +189,32 @@ async function loadGroupSet(groups) {
   return { loadedGroups, failedGroups };
 }
 
+export function getVisibilityState(elevationDeg, altitudeKm) {
+  const aboveHorizon = elevationDeg > 0;
+  if (!aboveHorizon) {
+    return {
+      aboveHorizon,
+      nadirAngleDeg: null,
+      nearby: false,
+      inFOV: false,
+    };
+  }
+
+  const elevationRad = elevationDeg * (Math.PI / 180);
+
+  // Off-nadir angle: angle from sub-satellite point to observer, measured at the satellite.
+  // Derived from spherical Earth geometry: sin(θ) = R·cos(ε) / (R + h)
+  const sinNadir = Math.min(1, (R_EARTH_KM * Math.cos(elevationRad)) / (R_EARTH_KM + altitudeKm));
+  const nadirAngleDeg = Math.asin(sinNadir) * (180 / Math.PI);
+
+  return {
+    aboveHorizon,
+    nadirAngleDeg,
+    nearby: elevationDeg > NEARBY_ELEVATION_DEG,
+    inFOV: nadirAngleDeg < FOV_HALF_ANGLE_DEG,
+  };
+}
+
 async function loadBundledFallbackSnapshot() {
   try {
     const res = await fetch(FALLBACK_SNAPSHOT_URL, { cache: 'no-store' });
@@ -283,8 +309,8 @@ export function getOverheadSatellites(sats, observerGd) {
 
       const distKm     = Math.sqrt(lookNow.position.x ** 2 + lookNow.position.y ** 2 + lookNow.position.z ** 2);
       const altitudeKm = distKm - R_EARTH_KM;
-      const elevationRad = lookNow.elevationDeg * (Math.PI / 180);
       const motion = getMotionMetadata(satrec, observerGd, now, lookNow);
+      const visibility = getVisibilityState(lookNow.elevationDeg, altitudeKm);
       let passEdges = getCachedPassEdges(omm.NORAD_CAT_ID, nowMs);
       if (!passEdges) {
         passEdges = computeCurrentPassEdgeAzimuths(satrec, observerGd, now, lookNow);
@@ -295,11 +321,6 @@ export function getOverheadSatellites(sats, observerGd) {
         });
       }
 
-      // Off-nadir angle: angle from sub-satellite point to observer, measured at the satellite.
-      // Derived from spherical Earth geometry: sin(θ) = R·cos(ε) / (R + h)
-      const sinNadir     = Math.min(1, (R_EARTH_KM * Math.cos(elevationRad)) / (R_EARTH_KM + altitudeKm));
-      const nadirAngleDeg = Math.asin(sinNadir) * (180 / Math.PI);
-
       overhead.push({
         name:             omm.OBJECT_NAME,
         noradId:          omm.NORAD_CAT_ID,
@@ -307,12 +328,12 @@ export function getOverheadSatellites(sats, observerGd) {
         elevationDeg:     lookNow.elevationDeg,
         azimuthDeg:       lookNow.azimuthDeg,
         altitudeKm,
-        nadirAngleDeg,
+        nadirAngleDeg: visibility.nadirAngleDeg,
         trend:            motion.trend,
         trackStartAzimuthDeg: passEdges.riseAzimuthDeg,
         trackEndAzimuthDeg: passEdges.setAzimuthDeg,
-        inFOV:   nadirAngleDeg < FOV_HALF_ANGLE_DEG,
-        nearby:  lookNow.elevationDeg > NEARBY_ELEVATION_DEG,
+        inFOV:   visibility.inFOV,
+        nearby:  visibility.nearby,
       });
     } catch (_) {
       // Bad orbital elements — skip silently

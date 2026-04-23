@@ -58,7 +58,7 @@
   </div>
 
   <details id="sat-list">
-    <summary>▸ <span id="sat-list-count">—</span> visible + next pass · expand</summary>
+    <summary>▸ <span id="sat-list-count">—</span> visible satellites · expand</summary>
     <table id="sat-table">
       <thead>
         <tr>
@@ -66,7 +66,7 @@
           <th>elev/time</th>
           <th>status</th>
           <th>bearing</th>
-          <th>skytrack</th>
+          <th>track/details</th>
         </tr>
       </thead>
       <tbody id="sat-tbody"></tbody>
@@ -76,7 +76,8 @@
   <footer>
     <div>Tracking <span id="total-tracked">—</span> imaging-capable satellites · <span id="confirmed-tracked">—</span> confirmed · <span id="probable-tracked">—</span> probable by orbit</div>
     <div>Does not include classified satellites.</div>
-    <div>Imaging range = nadir angle &lt; 30°. Likelihood model assumes optical sensors only.</div>
+    <div>Visible = above horizon. Nearby = elevation &gt; 25°. Imaging range = nadir angle &lt; 30°.</div>
+    <div>Overhead pass = predicted peak elevation of at least 80°. Exact 90° zenith passes are rare.</div>
   </footer>
 
   <!--

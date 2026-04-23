@@ -1,6 +1,6 @@
 ﻿// app.js
 import { loadImagingSatellites, getOverheadSatellites, observationLikelihood, getSolarElevationDeg } from './satellites.js';
-import { findNextPass } from './passes.js';
+import { findNextOverheadPass } from './passes.js';
 import * as satellite from 'https://cdn.jsdelivr.net/npm/satellite.js@7.0.0/+esm';
 
 const REFRESH_INTERVAL_MS  = 5_000; // re-check positions every 10 seconds
@@ -13,7 +13,7 @@ let loadedSats          = [];   // cached after first load - OMM data, not posit
 let prevInFOVIds    = new Set();  // NORAD IDs that were inFOV last tick
 let prevNearbyIds   = new Set();  // NORAD IDs that were nearby last tick
 let notifiedPassIds    = new Set();  // IDs that already got a "pass incoming" warning
-let nextPassCache      = null;       // last findNextPass() result
+let nextPassCache      = null;       // last findNextOverheadPass() result
 let nextPassComputedAt = 0;          // Date.now() when nextPassCache was computed
 let updateNextPassFn   = null;
 let nextPassRefreshPending = false;
@@ -60,6 +60,39 @@ function formatSkyTrack(sat) {
   return `${start}->${end}`;
 }
 
+function formatSoonText(minutesAway) {
+  if (typeof minutesAway !== 'number' || Number.isNaN(minutesAway)) return null;
+  if (minutesAway <= 0.3) return 'now';
+  return `${Math.max(1, Math.round(minutesAway))}m`;
+}
+
+function getRemainingPassMinutes(sat, targetMinutesAway, currentRiseMinutesAway) {
+  if (typeof targetMinutesAway !== 'number' || Number.isNaN(targetMinutesAway)) return null;
+  if (typeof sat?.minutesAway !== 'number' || Number.isNaN(sat.minutesAway)) return targetMinutesAway;
+  if (typeof currentRiseMinutesAway !== 'number' || Number.isNaN(currentRiseMinutesAway)) return targetMinutesAway;
+
+  return Math.max(0, targetMinutesAway - (sat.minutesAway - currentRiseMinutesAway));
+}
+
+function getVisibleStatus(sat) {
+  return sat.inFOV ? 'IN RANGE' : sat.nearby ? 'NEARBY' : 'VISIBLE';
+}
+
+function describeOverheadPass(sat, minsLeft = sat?.minutesAway ?? null) {
+  if (!sat) return null;
+
+  const parts = [];
+  const riseText = formatSoonText(getRemainingPassMinutes(sat, sat.riseMinutesAway, minsLeft));
+  if (riseText && riseText !== 'now') {
+    parts.push(`rises in ${riseText}`);
+  }
+  if (typeof sat.peakElevationDeg === 'number') {
+    parts.push(`${sat.peakElevationDeg.toFixed(0)}° peak`);
+  }
+
+  return parts.join(' | ');
+}
+
 function getLikelihoodFeedback(likelihood) {
   if (likelihood >= 90) return 'Panic: they absolutely have line of sight.';
   if (likelihood >= 75) return 'Very high chance they can see you right now.';
@@ -72,19 +105,22 @@ function getLikelihoodFeedback(likelihood) {
 
 function renderNextPass(result, minsLeft = result?.minutesAway ?? null) {
   if (!result) {
-    elNextPass.textContent = 'No pass in 24h';
+    elNextPass.textContent = 'No overhead pass in 24h';
     if (elNextPassMeta) elNextPassMeta.textContent = '—';
     return;
   }
 
   if (typeof minsLeft === 'number' && minsLeft > 0.3) {
-    elNextPass.textContent = `${result.name} in ${Math.round(minsLeft)}m`;
+    elNextPass.textContent = `${result.name} overhead in ${Math.round(minsLeft)}m`;
   } else {
-    elNextPass.textContent = 'Updating next pass...';
+    elNextPass.textContent = `${result.name} overhead now`;
   }
 
   if (elNextPassMeta) {
-    elNextPassMeta.textContent = `${formatBearingTrend(result)} | ${formatSkyTrack(result)}`;
+    const passDescription = describeOverheadPass(result, minsLeft);
+    elNextPassMeta.textContent = [formatBearingTrend(result), formatSkyTrack(result), passDescription]
+      .filter(Boolean)
+      .join(' | ');
   }
 }
 
@@ -162,10 +198,10 @@ async function run() {
   // 3. Overhead count - fast, runs synchronously on the already-loaded data
   refresh(observerGd);
 
-  // 4. Next pass - CPU-intensive; defer first run, then re-run every 5 min.
+  // 4. Next overhead pass - CPU-intensive; defer first run, then re-run every 5 min.
   //    Stored in nextPassCache so refresh() can fire the "pass incoming" warning.
   function updateNextPass() {
-    const result       = findNextPass(loadedSats, observerGd);
+    const result       = findNextOverheadPass(loadedSats, observerGd);
     nextPassCache      = result;
     nextPassComputedAt = Date.now();
     nextPassRefreshPending = false;
@@ -214,7 +250,7 @@ function refresh(observerGd) {
     elDaylightStatus.textContent = `${likelihoodFeedback}  |  ${daylightLabel}  |  ${inFOV.length} satellite${inFOV.length !== 1 ? 's' : ''} within imaging swath`;
   }
 
-  // Update next-pass countdown every tick using elapsed time since last computation
+  // Update next-overhead countdown every tick using elapsed time since last computation
   if (nextPassCache && nextPassComputedAt) {
     const minsLeft = nextPassCache.minutesAway - (Date.now() - nextPassComputedAt) / 60_000;
     nextPassMinsLeft = minsLeft;
@@ -232,7 +268,7 @@ function refresh(observerGd) {
   }
 
   // Rebuild satellite table
-  renderSatTable(overhead, nextPassCache, nextPassMinsLeft);
+  renderSatTable(overhead);
   const currentInFOVIds  = new Set(inFOV.map(s => s.noradId));
   const currentNearbyIds = new Set(nearby.map(s => s.noradId));
   const overheadIds      = new Set(overhead.map(s => s.noradId));
@@ -254,7 +290,7 @@ function refresh(observerGd) {
   prevInFOVIds  = currentInFOVIds;
   prevNearbyIds = currentNearbyIds;
 
-  // LEVEL 1: next pass is within the warning window
+  // LEVEL 1: next overhead pass is within the warning window
   if (nextPassCache) {
     const minsLeft = nextPassCache.minutesAway - (Date.now() - nextPassComputedAt) / 60_000;
     if (minsLeft <= PASS_WARNING_MINS) notifyPassIncoming(nextPassCache, minsLeft);
@@ -264,26 +300,16 @@ function refresh(observerGd) {
 // -- Satellite table ---------------------------------------------------------
 
 /** Rebuild the collapsible satellite list table, sorted by elevation descending. */
-function renderSatTable(overhead, nextPass, nextPassMinsLeft) {
+function renderSatTable(overhead) {
   if (!elSatTbody) return;
   const sorted = [...overhead].sort((a, b) => b.elevationDeg - a.elevationDeg);
-  const rows = [...sorted];
-  const nextPassAlreadyVisible = nextPass && sorted.some(sat => sat.noradId === nextPass.noradId);
 
-  if (nextPass && !nextPassAlreadyVisible && typeof nextPassMinsLeft === 'number' && nextPassMinsLeft > 0.3) {
-    rows.push({
-      ...nextPass,
-      upcoming: true,
-      displayMinutesAway: Math.max(1, Math.round(nextPassMinsLeft)),
-    });
-  }
-
-  if (elSatListCount) elSatListCount.textContent = rows.length;
+  if (elSatListCount) elSatListCount.textContent = sorted.length;
   const fragment = document.createDocumentFragment();
 
-  for (const sat of rows) {
-    const rowCls = sat.upcoming ? 'sat-row-next' : sat.inFOV ? 'sat-row-fov' : sat.nearby ? 'sat-row-nearby' : '';
-    const status = sat.upcoming ? 'NEXT PASS' : sat.inFOV ? 'IN RANGE' : sat.nearby ? 'NEARBY' : '-';
+  for (const sat of sorted) {
+    const rowCls = sat.inFOV ? 'sat-row-fov' : sat.nearby ? 'sat-row-nearby' : '';
+    const status = getVisibleStatus(sat);
     const name   = (sat.name + (sat.confirmed === false ? ' ?' : '')).slice(0, 24);
 
     const row = document.createElement('tr');
@@ -293,9 +319,7 @@ function renderSatTable(overhead, nextPass, nextPassMinsLeft) {
     nameCell.textContent = name;
 
     const elevationCell = document.createElement('td');
-    elevationCell.textContent = sat.upcoming
-      ? `in ${sat.displayMinutesAway}m`
-      : `${sat.elevationDeg.toFixed(0)}\u00b0`;
+    elevationCell.textContent = `${sat.elevationDeg.toFixed(0)}\u00b0`;
 
     const statusCell = document.createElement('td');
     statusCell.textContent = status;
@@ -351,13 +375,13 @@ function updateNotifyButton() {
       : 'Enable overhead alerts';
 }
 
-// LEVEL 1 - satellite is approaching the horizon (~5 min warning)
+// LEVEL 1 - next overhead pass is within the warning window
 function notifyPassIncoming(pass, minsLeft) {
   if (!notificationEnabled || notifiedPassIds.has(pass.noradId)) return;
   notifiedPassIds.add(pass.noradId);
   const mins = Math.max(1, Math.round(minsLeft));
   new Notification('Satellite approaching', {
-    body: `${pass.name} passes overhead in ${mins} minute${mins !== 1 ? 's' : ''}`,
+    body: `${pass.name} reaches a ${pass.peakElevationDeg.toFixed(0)}\u00b0 peak in ${mins} minute${mins !== 1 ? 's' : ''}`,
     icon: './icons/icon-192.png',
     tag:  `pass-${pass.noradId}`,
   });
