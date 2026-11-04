@@ -5,11 +5,11 @@
 }
 
 body {
-  background-color: #1e1e1e;
+  background-color: #111;
   font-family: "Jersey 20", sans-serif;
   font-weight: 400;
   font-style: normal;
-  color: #666;
+  color: #aaa;
   max-width: 460px;
   margin: 0 auto;
   padding: 2.5rem 1.5rem;
@@ -68,10 +68,10 @@ body.loading footer span {
 
 /* ── Likelihood color scale ── */
 #likelihood { transition: color 0.6s; }
-.likelihood-low    { color: #1a7a1a; } /* 0–24%  — green */
+.likelihood-low    { color: #49c549; } /* 0–24%  — green */
 .likelihood-guarded { color: #b8b800; } /* 25–49% — yellow */
 .likelihood-elevated { color: #cc6600; } /* 50–74% — orange */
-.likelihood-high   { color: #cc2200; } /* 75–99% — red */
+.likelihood-high   { color: #ff4444; } /* 75–99% — red */
 
 /* ── Primary stat ── */
 .stat, .value {
@@ -152,11 +152,11 @@ body.loading footer span {
 
 /* level 2 alert: in imaging range */
 .breakdown-stat.alert-fov .value { color: #ff2200; }
-.breakdown-stat.alert-fov .label { color: #661100; }
+.breakdown-stat.alert-fov .label { color: #ff7766; }
 
 /* level 3 alert: nearby (elevation > 25°) */
 .breakdown-stat.alert-nearby .value { color: #ffcc00; }
-.breakdown-stat.alert-nearby .label { color: #665500; }
+.breakdown-stat.alert-nearby .label { color: #b09400; }
 
 /* ── Buttons ── */
 .btn {
@@ -173,13 +173,13 @@ body.loading footer span {
   letter-spacing: 0.12em;
 }
 
-.btn:hover { opacity: 0.6; }
+.btn:hover { opacity: 0.8; }
 
 #install-btn {
   display: none;
   border-color: #393939;
-  color: #6b6b6b;
-  background-color: #1e1e1e;
+  color: #aaa;
+  background-color: #111;
   margin-top: 0.75rem;
   margin-left: 0.5rem;
 }
@@ -205,7 +205,7 @@ details#sat-list summary {
 details#sat-list summary::-webkit-details-marker { display: none; }
 
 details#sat-list[open] summary {
-  color: #444;
+  color: #aaa;
   border-bottom: none;
   margin-bottom: 0.5rem;
 }
@@ -219,7 +219,7 @@ details#sat-list[open] summary {
 
 #sat-table th {
   padding: 0.2rem 0 0.45rem;
-  color: #5a5a5a;
+  color: #aaa;
   font-size: 0.52rem;
   font-weight: 400;
   letter-spacing: 0.08em;
@@ -229,7 +229,7 @@ details#sat-list[open] summary {
 
 #sat-table td {
   padding: 0.32rem 0;
-  color: #1e1e1e;
+  color: #fff;
   border-bottom: 1px solid #080808;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -256,15 +256,15 @@ details#sat-list[open] summary {
 #sat-table td:nth-child(5) { width: 20%; text-align: right; }
 
 .sat-row-fov    td:first-child,
-.sat-row-fov    td:last-child  { color: #cc1100; }
-.sat-row-fov    td:nth-child(3) { color: #cc1100 !important; }
+.sat-row-fov    td:last-child  { color: #ff4444; }
+.sat-row-fov    td:nth-child(3) { color: #ff4444 !important; }
 .sat-row-nearby td:first-child,
-.sat-row-nearby td:last-child  { color: #886600; }
+.sat-row-nearby td:last-child  { color: #b08a00; }
 .sat-row-nearby td:nth-child(3) { color: #ffcc00 !important; }
 .sat-row-next   td:first-child,
-.sat-row-next   td:last-child  { color: #4466cc; }
+.sat-row-next   td:last-child  { color: #809cff; }
 
-#sat-tbody tr.sat-row-fov td:nth-child(3)    { color: #cc1100 !important; }
+#sat-tbody tr.sat-row-fov td:nth-child(3)    { color: #ff4444 !important; }
 #sat-tbody tr.sat-row-nearby td:nth-child(3) { color: #ffcc00 !important; }
 
 /* ── Footer ── */
