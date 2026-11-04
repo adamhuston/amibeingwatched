@@ -4,16 +4,9 @@ import { findNextOverheadPass } from './passes.js';
 import * as satellite from 'https://cdn.jsdelivr.net/npm/satellite.js@7.0.0/+esm';
 
 const REFRESH_INTERVAL_MS  = 5_000; // re-check positions every 10 seconds
-const PASS_WARNING_MINS    = 5;      // fire "pass incoming" alert this many minutes ahead
-const ALERTS_PREF_KEY      = 'overhead_alerts_enabled';
 
-let notificationEnabled = false;
 let loadedSats          = [];   // cached after first load - OMM data, not positions
 
-//  Notification state (persist across refresh ticks) 
-let prevInFOVIds    = new Set();  // NORAD IDs that were inFOV last tick
-let prevNearbyIds   = new Set();  // NORAD IDs that were nearby last tick
-let notifiedPassIds    = new Set();  // IDs that already got a "pass incoming" warning
 let nextPassCache      = null;       // last findNextOverheadPass() result
 let nextPassComputedAt = 0;          // Date.now() when nextPassCache was computed
 let updateNextPassFn   = null;
@@ -38,9 +31,6 @@ const elLikelihood       = document.getElementById('likelihood');
 const elDaylightStatus   = document.getElementById('daylight-status');
 const elSatTbody         = document.getElementById('sat-tbody');
 const elSatListCount     = document.getElementById('sat-list-count');
-const elNotifyBtn        = document.getElementById('notify-btn');
-
-syncNotificationState();
 
 function azimuthToCompass(azimuthDeg) {
   if (typeof azimuthDeg !== 'number' || Number.isNaN(azimuthDeg)) return '-';
@@ -223,7 +213,6 @@ function refresh(observerGd) {
   const nearby  = overhead.filter(s => s.nearby);
   const solarElev  = getSolarElevationDeg(observerGd);
   const likelihood = observationLikelihood(overhead, solarElev);
-  let nextPassMinsLeft = null;
 
   elImagingCount.textContent = overhead.length;
   elInFOV.textContent        = inFOV.length;
@@ -254,7 +243,6 @@ function refresh(observerGd) {
   // Update next-overhead countdown every tick using elapsed time since last computation
   if (nextPassCache && nextPassComputedAt) {
     const minsLeft = nextPassCache.minutesAway - (Date.now() - nextPassComputedAt) / 60_000;
-    nextPassMinsLeft = minsLeft;
     if (minsLeft > 0.3) {
       renderNextPass(nextPassCache, minsLeft);
     } else {
@@ -270,32 +258,6 @@ function refresh(observerGd) {
 
   // Rebuild satellite table
   renderSatTable(overhead);
-  const currentInFOVIds  = new Set(inFOV.map(s => s.noradId));
-  const currentNearbyIds = new Set(nearby.map(s => s.noradId));
-  const overheadIds      = new Set(overhead.map(s => s.noradId));
-
-  // LEVEL 2: satellite newly entered imaging range
-  for (const sat of inFOV) {
-    if (!prevInFOVIds.has(sat.noradId)) notifyFOVEntry(sat);
-  }
-  // LEVEL 3: satellite newly became nearby (elevation > 25\u00b0)
-  for (const sat of nearby) {
-    if (!prevNearbyIds.has(sat.noradId)) notifyNearby(sat);
-  }
-
-  // Reset pass-incoming dedup once a satellite actually rises
-  for (const id of notifiedPassIds) {
-    if (overheadIds.has(id)) notifiedPassIds.delete(id);
-  }
-
-  prevInFOVIds  = currentInFOVIds;
-  prevNearbyIds = currentNearbyIds;
-
-  // LEVEL 1: next overhead pass is within the warning window
-  if (nextPassCache) {
-    const minsLeft = nextPassCache.minutesAway - (Date.now() - nextPassComputedAt) / 60_000;
-    if (minsLeft <= PASS_WARNING_MINS) notifyPassIncoming(nextPassCache, minsLeft);
-  }
 }
 
 // -- Satellite table ---------------------------------------------------------
@@ -336,111 +298,6 @@ function renderSatTable(overhead) {
   }
 
   elSatTbody.replaceChildren(fragment);
-}
-
-// -- Notifications ----------------------------------------------------------
-
-/**
- * Request notification permission on explicit user action (button click).
- * Never call this automatically - browsers block auto-permission requests.
- * Exported so index.html can wire it to the button.
- */
-export function requestNotifications() {
-  if (!('Notification' in window)) return;
-
-  if (Notification.permission === 'granted') {
-    notificationEnabled = !notificationEnabled;
-    saveNotificationPreference(notificationEnabled);
-    updateNotifyButton();
-    return;
-  }
-
-  if (Notification.permission === 'denied') {
-    updateNotifyButton();
-    return;
-  }
-
-  Notification.requestPermission().then(perm => {
-    notificationEnabled = perm === 'granted';
-    saveNotificationPreference(notificationEnabled);
-    updateNotifyButton();
-  });
-}
-
-function syncNotificationState() {
-  if (!('Notification' in window)) {
-    if (elNotifyBtn) {
-      elNotifyBtn.textContent = 'Alerts unavailable';
-      elNotifyBtn.disabled = true;
-    }
-    return;
-  }
-
-  if (Notification.permission === 'granted') {
-    const savedPref = localStorage.getItem(ALERTS_PREF_KEY);
-    notificationEnabled = savedPref === null ? true : savedPref === '1';
-  } else {
-    notificationEnabled = false;
-  }
-  updateNotifyButton();
-}
-
-function saveNotificationPreference(enabled) {
-  try {
-    localStorage.setItem(ALERTS_PREF_KEY, enabled ? '1' : '0');
-  } catch (_) {
-    // localStorage is best-effort; alerts can still toggle for this session.
-  }
-}
-
-function updateNotifyButton() {
-  if (!elNotifyBtn) return;
-
-  if (Notification.permission === 'denied') {
-    elNotifyBtn.textContent = 'Alerts blocked';
-    return;
-  }
-
-  if (Notification.permission === 'granted') {
-    elNotifyBtn.textContent = notificationEnabled
-      ? 'Disable overhead alerts'
-      : 'Enable overhead alerts';
-    return;
-  }
-
-  elNotifyBtn.textContent = 'Enable overhead alerts';
-}
-
-// LEVEL 1 - next overhead pass is within the warning window
-function notifyPassIncoming(pass, minsLeft) {
-  if (!notificationEnabled || notifiedPassIds.has(pass.noradId)) return;
-  notifiedPassIds.add(pass.noradId);
-  const mins = Math.max(1, Math.round(minsLeft));
-  new Notification('Satellite approaching', {
-    body: `${pass.name} reaches a ${pass.peakElevationDeg.toFixed(0)}\u00b0 peak in ${mins} minute${mins !== 1 ? 's' : ''}`,
-    icon: './icons/icon-192.png',
-    tag:  `pass-${pass.noradId}`,
-  });
-}
-
-// LEVEL 2 - satellite entered imaging swath (nadir < 30\u00b0) - it can see your location
-function notifyFOVEntry(sat) {
-  if (!notificationEnabled) return;
-  new Notification('Satellite in imaging range', {
-    body: `${sat.name} can see your location  |  ${sat.elevationDeg.toFixed(0)}\u00b0 elevation`,
-    icon: './icons/icon-192.png',
-    tag:  `fov-${sat.noradId}`,
-  });
-}
-
-// LEVEL 3 - satellite is elevated above 25\u00b0 - tracking arc is well established
-function notifyNearby(sat) {
-  if (!notificationEnabled) return;
-  new Notification('Satellite nearby', {
-    body: `${sat.name} is ${sat.elevationDeg.toFixed(0)}\u00b0 above the horizon`,
-    icon: './icons/icon-192.png',
-    tag:  `near-${sat.noradId}`,
-  });
 }
 
 //  UI helpers 

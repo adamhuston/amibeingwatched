@@ -175,12 +175,6 @@ body.loading footer span {
 
 .btn:hover { opacity: 0.6; }
 
-#notify-btn {
-  border-color: #393939;
-  color: #6b6b6b;
-  margin-top: 0.5rem;
-}
-
 #install-btn {
   display: none;
   border-color: #393939;
