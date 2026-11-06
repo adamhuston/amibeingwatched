@@ -1,4 +1,4 @@
-﻿// app.js
+// app.js
 import { loadImagingSatellites, getOverheadSatellites, observationLikelihood, getSolarElevationDeg } from './satellites.js';
 import { findNextOverheadPass } from './passes.js';
 import * as satellite from 'https://cdn.jsdelivr.net/npm/satellite.js@7.0.0/+esm';
