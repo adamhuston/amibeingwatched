@@ -281,3 +281,25 @@ footer {
 footer span {
   color: #d0d0d0;
 }
+
+footer .brand-mark {
+  display: inline-block;
+  margin-top: 0.75rem;
+  color: #fff;
+  font-family: "Honk", system-ui;
+  font-size: 1.5rem;
+  font-variation-settings: "MORF" 15, "SHLN" 50;
+  letter-spacing: -0.08em;
+  line-height: 1.2;
+  text-decoration: none;
+  text-transform: none;
+}
+
+footer .brand-mark span {
+  color: #ff4444;
+}
+
+footer .brand-mark:focus-visible {
+  outline: 2px solid #ff4444;
+  outline-offset: 3px;
+}
