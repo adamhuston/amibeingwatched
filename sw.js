@@ -8,7 +8,7 @@
 //                                        SW cache is the offline/failure fallback only)
 //   satellite.js CDN (jsDelivr):        cache-first — URL is pinned to a specific version
 
-const CACHE_NAME = 'satellite-overhead-v19';
+const CACHE_NAME = 'satellite-overhead-v20';
 
 const APP_SHELL = [
   './',
@@ -18,6 +18,7 @@ const APP_SHELL = [
   './satellites.js',
   './passes.js',
   './manifest.json',
+  './Honk-Regular-VariableFont_MORF,SHLN.ttf',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
