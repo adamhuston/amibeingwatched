@@ -16,6 +16,7 @@ function getLookAnglesDeg(satrec, observerGd, date) {
 
   const posEcf = satellite.eciToEcf(pv.position, gmst);
   const look   = satellite.ecfToLookAngles(observerGd, posEcf);
+  if (!Number.isFinite(look.elevation) || !Number.isFinite(look.azimuth)) return null;
   return {
     azimuthDeg: look.azimuth * (180 / Math.PI),
     elevationDeg: look.elevation * (180 / Math.PI),
@@ -61,6 +62,7 @@ function getUpcomingPassDetails(satrec, observerGd, riseDate, riseMinutesAway) {
   let peakElevationDeg = riseLook.elevationDeg;
   let peakMinutesAway = riseMinutesAway;
   let setAzimuthDeg = riseLook.azimuthDeg;
+  let setMinutesAway = riseMinutesAway + MAX_PASS_DURATION_MINUTES;
 
   for (let i = 1; i <= maxSteps; i++) {
     const t = new Date(riseDate.getTime() + i * PASS_EDGE_STEP_SECONDS * 1000);
@@ -68,6 +70,7 @@ function getUpcomingPassDetails(satrec, observerGd, riseDate, riseMinutesAway) {
     if (!look) continue;
     if (look.elevationDeg <= 0) {
       setAzimuthDeg = look.azimuthDeg;
+      setMinutesAway = riseMinutesAway + (i * PASS_EDGE_STEP_SECONDS) / 60;
       break;
     }
 
@@ -84,6 +87,7 @@ function getUpcomingPassDetails(satrec, observerGd, riseDate, riseMinutesAway) {
     setAzimuthDeg,
     peakElevationDeg,
     peakMinutesAway,
+    setMinutesAway,
   };
 }
 
@@ -96,13 +100,12 @@ function getUpcomingPassDetails(satrec, observerGd, riseDate, riseMinutesAway) {
  * Strategy:
  *   1. Compute current elevation for every satellite.
  *   2. Check whether any currently visible satellite is already in an overhead-quality pass.
- *   3. Sort below-horizon satellites by elevation descending (closest to 0 = rising soonest).
+ *   3. Sort satellites by elevation descending (closest to rising first).
  *   4. Step forward in time until a satellite rises.
  *   5. Inspect that pass and keep it only if its peak reaches the overhead threshold.
  *   6. Return the earliest qualifying overhead peak, whether already in progress or upcoming.
  *
- * This function is CPU-intensive. The caller should defer it with setTimeout(fn, 0)
- * so the overhead count renders first.
+ * This function is CPU-intensive and runs in a module worker.
  *
  * @param {object[]} sats       - OMM JSON objects from loadImagingSatellites()
  * @param {object}   observerGd - { latitude (rad), longitude (rad), height (km) }
@@ -112,24 +115,29 @@ export function findNextOverheadPass(sats, observerGd) {
   const now   = new Date();
   const gmst0 = satellite.gstime(now);
   let earliest = null;
+  let propagatedCount = 0;
 
   // Step 1 & 2: compute current elevations, keep any qualifying pass already in progress,
-  // and collect below-horizon satellites for future-pass scanning.
+  // and collect satellites for scanning subsequent passes.
   const candidates = [];
   for (const omm of sats) {
     try {
       const satrec = satellite.json2satrec(omm);
       const pv0    = satellite.propagate(satrec, now);
       if (!pv0?.position) continue;
-
       const posEcf0 = satellite.eciToEcf(pv0.position, gmst0);
       const look0   = satellite.ecfToLookAngles(observerGd, posEcf0);
+      if (!Number.isFinite(look0.elevation) || !Number.isFinite(look0.azimuth)) continue;
+      propagatedCount++;
 
+      let startMinutesAway = 0;
       if (look0.elevation > 0) {
         const details = getUpcomingPassDetails(satrec, observerGd, now, 0);
-        if (!details || details.peakElevationDeg < OVERHEAD_PASS_MIN_ELEVATION_DEG) continue;
+        if (!details) continue;
+        startMinutesAway = details.setMinutesAway;
 
-        if (!earliest || details.peakMinutesAway < earliest.minutesAway) {
+        if (details.peakElevationDeg >= OVERHEAD_PASS_MIN_ELEVATION_DEG &&
+            (!earliest || details.peakMinutesAway < earliest.minutesAway)) {
           earliest = {
             name: omm.OBJECT_NAME,
             noradId: omm.NORAD_CAT_ID,
@@ -142,20 +150,23 @@ export function findNextOverheadPass(sats, observerGd) {
             trackEndAzimuthDeg: details.setAzimuthDeg ?? details.riseLook.azimuthDeg,
           };
         }
-      } else {
-        candidates.push({ omm, satrec, elevation: look0.elevation });
       }
-    } catch (_) { /* bad elements — skip */ }
+      candidates.push({ omm, satrec, elevation: look0.elevation, startMinutesAway });
+    } catch (err) {
+      console.warn(`[passes] Could not propagate ${omm.NORAD_CAT_ID}:`, err.message);
+    }
   }
+  if (propagatedCount === 0) throw new Error('No satellite positions could be calculated');
 
-  // Step 3: sort so the satellite with elevation nearest 0 (most negative → 0) is first
+  // Step 3: scan higher-elevation satellites first.
   candidates.sort((a, b) => b.elevation - a.elevation);
 
-  // Step 4: step forward in time for each below-horizon candidate
+  // Step 4: scan each candidate through the entire lookahead window.
   const totalSteps = (LOOKAHEAD_HOURS * 3600) / STEP_SECONDS;
 
-  for (const { omm, satrec } of candidates) {
-    for (let i = 1; i <= totalSteps; i++) {
+  for (const { omm, satrec, startMinutesAway } of candidates) {
+    for (let i = Math.floor(startMinutesAway) + 1; i <= totalSteps; i++) {
+      if (earliest && (i * STEP_SECONDS) / 60 >= earliest.minutesAway) break;
       const t = new Date(now.getTime() + i * STEP_SECONDS * 1000);
       try {
         const gmst   = satellite.gstime(t);
@@ -169,8 +180,12 @@ export function findNextOverheadPass(sats, observerGd) {
           const riseMinutesAway = (i * STEP_SECONDS) / 60;
           const riseDate = t;
           const details = getUpcomingPassDetails(satrec, observerGd, riseDate, riseMinutesAway);
-          if (!details) break;
-          if (details.peakElevationDeg < OVERHEAD_PASS_MIN_ELEVATION_DEG) break;
+          if (!details) continue;
+          if (details.peakElevationDeg < OVERHEAD_PASS_MIN_ELEVATION_DEG ||
+              details.peakMinutesAway > LOOKAHEAD_HOURS * 60) {
+            i = Math.floor(details.setMinutesAway);
+            continue;
+          }
 
           const overheadMinutesAway = details.peakMinutesAway;
           if (!earliest || overheadMinutesAway < earliest.minutesAway) {
@@ -189,7 +204,10 @@ export function findNextOverheadPass(sats, observerGd) {
           }
           break; // earliest pass for this satellite found; move on
         }
-      } catch (_) { /* skip */ }
+      } catch (err) {
+        console.warn(`[passes] Could not predict ${omm.NORAD_CAT_ID}:`, err.message);
+        break;
+      }
     }
   }
 

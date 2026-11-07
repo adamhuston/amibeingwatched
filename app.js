@@ -1,11 +1,18 @@
 // app.js
-import { loadImagingSatellites, getOverheadSatellites, observationLikelihood, getSolarElevationDeg } from './satellites.js';
-import { findNextOverheadPass } from './passes.js';
+import { CACHE_TTL_MS, loadImagingSatellites, getOverheadSatellites, observationLikelihood, getSolarElevationDeg } from './satellites.js';
 import * as satellite from 'https://cdn.jsdelivr.net/npm/satellite.js@7.0.0/+esm';
 
-const REFRESH_INTERVAL_MS  = 5_000; // re-check positions every 10 seconds
+const REFRESH_INTERVAL_MS  = 5_000;
+const RETRY_INTERVAL_MS = 30_000;
+const PASS_REFRESH_INTERVAL_MS = 5 * 60_000;
 
-let loadedSats          = [];   // cached after first load - OMM data, not positions
+let loadedSats = [];
+let running = false;
+let positionTimer;
+let passTimer;
+let reloadTimer;
+let passTimeout;
+let passWorker = null;
 
 let nextPassCache      = null;       // last findNextOverheadPass() result
 let nextPassComputedAt = 0;          // Date.now() when nextPassCache was computed
@@ -115,8 +122,57 @@ function renderNextPass(result, minsLeft = result?.minutesAway ?? null) {
   }
 }
 
+function stopTracking() {
+  clearInterval(positionTimer);
+  clearInterval(passTimer);
+  clearTimeout(reloadTimer);
+  clearTimeout(passTimeout);
+  passWorker?.terminate();
+  passWorker = null;
+  nextPassCache = null;
+  nextPassComputedAt = 0;
+  nextPassRefreshPending = false;
+  updateNextPassFn = null;
+}
+
+function clearReadings() {
+  for (const el of [elImagingCount, elInFOV, elNearby, elLikelihood, elTotalTracked,
+    elConfirmedTracked, elProbableTracked, elSatListCount, elDaylightStatus, elNextPassMeta]) {
+    if (el) el.textContent = '—';
+  }
+  elNextPass.textContent = 'Awaiting satellite data...';
+  elFovStat.classList.remove('alert-fov');
+  elNearStat.classList.remove('alert-nearby');
+  elSatTbody?.replaceChildren();
+}
+
+function failTracking(message, retry = true) {
+  stopTracking();
+  clearReadings();
+  document.body.classList.remove('loading');
+  showStatus('');
+  showError(message + (retry ? ' Retrying automatically in 30 seconds.' : ''));
+  elRetryBtn.style.display = 'inline-block';
+  if (retry) reloadTimer = setTimeout(run, RETRY_INTERVAL_MS);
+}
+
 //  Entry point 
 async function run() {
+  if (running) return;
+  running = true;
+  stopTracking();
+  clearReadings();
+  try {
+    await startTracking();
+  } catch (err) {
+    console.error('[app] Tracking failed:', err);
+    failTracking('Satellite tracking is unavailable: ' + err.message);
+  } finally {
+    running = false;
+  }
+}
+
+async function startTracking() {
   // Reset any previous error state on each attempt
   document.body.classList.add('loading');
   elError.textContent      = '';
@@ -135,19 +191,18 @@ async function run() {
     );
   } catch (err) {
     elLocation.textContent   = '';
-    elRetryBtn.style.display = 'inline-block';
-    document.body.classList.remove('loading');
 
     // GeolocationPositionError codes: 1=PERMISSION_DENIED, 2=UNAVAILABLE, 3=TIMEOUT
     if (err.code === 1) {
-      showError(
+      failTracking(
         'Location permission was not granted. ' +
-        'Click "Try again" to re-prompt, or enable Location in your browser site settings and reload.'
+        'Click "Try again" to re-prompt, or enable Location in your browser site settings and reload.',
+        false
       );
     } else if (err.code === 3) {
-      showError('Location request timed out. Check your device\'s location services and try again.');
+      failTracking('Location request timed out. Check your device\'s location services.');
     } else {
-      showError('Could not determine your location. Try again.');
+      failTracking('Could not determine your location.');
     }
     return;
   }
@@ -164,19 +219,7 @@ async function run() {
 
   // 2. Load satellite OMM data (localStorage-cached; fetches CelesTrak on cold start)
   showStatus('Loading satellite data...');
-  try {
-    loadedSats = await loadImagingSatellites();
-  } catch (err) {
-    console.error('[app] loadImagingSatellites threw:', err);
-    document.body.classList.remove('loading');
-    elRetryBtn.style.display = 'inline-block';
-    showError(
-      err?.message?.includes('bundled fallback snapshot')
-        ? 'Live satellite data could not be reached, and no local fallback snapshot is bundled with this build.'
-        : 'Failed to load satellite data. Check your connection and reload.'
-    );
-    return;
-  }
+  loadedSats = await loadImagingSatellites();
   showStatus('');
 
   // Update confirmed vs probable tracking counts (set once; doesn't change on refresh)
@@ -189,21 +232,63 @@ async function run() {
   // 3. Overhead count - fast, runs synchronously on the already-loaded data
   refresh(observerGd);
 
-  // 4. Next overhead pass - CPU-intensive; defer first run, then re-run every 5 min.
-  //    Stored in nextPassCache so refresh() can fire the "pass incoming" warning.
+  // Prediction runs off the UI thread so position refreshes remain responsive.
   function updateNextPass() {
-    const result       = findNextOverheadPass(loadedSats, observerGd);
-    nextPassCache      = result;
-    nextPassComputedAt = Date.now();
-    nextPassRefreshPending = false;
-    renderNextPass(result);
+    if (passWorker) return;
+    nextPassRefreshPending = true;
+    function predictionFailed(message) {
+      clearTimeout(passTimeout);
+      passWorker?.terminate();
+      passWorker = null;
+      nextPassRefreshPending = false;
+      nextPassCache = null;
+      nextPassComputedAt = 0;
+      elNextPass.textContent = 'Pass prediction unavailable';
+      if (elNextPassMeta) elNextPassMeta.textContent = message;
+      console.error('[app] Pass prediction failed:', message);
+    }
+    try {
+      const worker = new Worker(new URL('./passes-worker.js', import.meta.url), { type: 'module' });
+      passWorker = worker;
+      worker.onmessage = ({ data }) => {
+        if (passWorker !== worker) return;
+        if (data.error) {
+          predictionFailed(data.error);
+          return;
+        }
+        clearTimeout(passTimeout);
+        worker.terminate();
+        passWorker = null;
+        nextPassCache = data.result;
+        nextPassComputedAt = data.computedAt;
+        nextPassRefreshPending = false;
+        renderNextPass(data.result, data.result
+          ? data.result.minutesAway - (Date.now() - data.computedAt) / 60_000 : null);
+      };
+      worker.onerror = event => {
+        event.preventDefault();
+        if (passWorker === worker) predictionFailed(event.message || 'Worker could not load');
+      };
+      passTimeout = setTimeout(() => predictionFailed('Prediction timed out; will retry automatically.'), 120_000);
+      if (!nextPassComputedAt) elNextPass.textContent = 'Calculating next overhead pass...';
+      worker.postMessage({ sats: loadedSats, observerGd });
+    } catch (err) {
+      predictionFailed(err.message);
+    }
   }
   updateNextPassFn = updateNextPass;
-  setTimeout(updateNextPass, 0);
-  setInterval(updateNextPass, 5 * 60_000);
+  updateNextPass();
+  passTimer = setInterval(updateNextPass, PASS_REFRESH_INTERVAL_MS);
 
-  // 5. Refresh positions every 10 seconds - satellites move ~7 km/s
-  setInterval(() => refresh(observerGd), REFRESH_INTERVAL_MS);
+  positionTimer = setInterval(() => {
+    try {
+      refresh(observerGd);
+    } catch (err) {
+      console.error('[app] Position refresh failed:', err);
+      failTracking('Satellite positions are unavailable: ' + err.message);
+    }
+  }, REFRESH_INTERVAL_MS);
+  reloadTimer = setTimeout(run, CACHE_TTL_MS);
 }
 
 /** Re-compute which satellites are currently overhead and update the UI. */
@@ -252,7 +337,7 @@ function refresh(observerGd) {
         setTimeout(() => updateNextPassFn?.(), 0);
       }
     }
-  } else if (!nextPassCache) {
+  } else if (nextPassComputedAt) {
     renderNextPass(null);
   }
 
@@ -306,4 +391,11 @@ function showError(msg)  { elError.textContent  = msg; }
 
 //  Boot 
 elRetryBtn.addEventListener('click', run);
+window.addEventListener('online', run);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') run();
+});
+window.addEventListener('pageshow', event => {
+  if (event.persisted) run();
+});
 run();

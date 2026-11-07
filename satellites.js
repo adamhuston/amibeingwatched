@@ -2,8 +2,8 @@
 import * as satellite from 'https://cdn.jsdelivr.net/npm/satellite.js@7.0.0/+esm';
 
 const CELESTRAK_BASE        = 'https://celestrak.org/NORAD/elements/gp.php';
-const FALLBACK_SNAPSHOT_URL = './satellites-fallback.json';
-const CACHE_TTL_MS          = 2 * 60 * 60 * 1000; // 2 hours — CelesTrak enforced rate limit
+export const CACHE_TTL_MS   = 2 * 60 * 60 * 1000; // 2 hours — CelesTrak enforced rate limit
+const FETCH_TIMEOUT_MS     = 15_000;
 const R_EARTH_KM            = 6371;
 const MU_KM3_S2             = 398600.4418;          // Earth gravitational parameter km³/s²
 export const FOV_HALF_ANGLE_DEG  = 30;  // max off-nadir for typical imaging satellite
@@ -21,15 +21,29 @@ const IMAGING_GROUPS      = ['resource', 'planet', 'DMC'];
 const PROBABLE_GROUPS     = ['military', 'cubesat'];
 
 function readCachedGroup(dataKey) {
-  const raw = localStorage.getItem(dataKey);
-  if (!raw) return null;
-
   try {
+    const raw = localStorage.getItem(dataKey);
+    if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : null;
-  } catch (_) {
+    return isUsableGroup(parsed) ? parsed : null;
+  } catch (err) {
+    console.warn('[satellites] Could not read cached group:', err.message);
     return null;
   }
+}
+
+function isUsableGroup(data) {
+  return Array.isArray(data) && data.length > 0 && data.every(omm =>
+    omm && typeof omm.OBJECT_NAME === 'string' &&
+    Number.isFinite(Number(omm.NORAD_CAT_ID)) && Number(omm.NORAD_CAT_ID) > 0 &&
+    Number.isFinite(Date.parse(omm.EPOCH)) &&
+    ['MEAN_MOTION', 'ECCENTRICITY', 'INCLINATION', 'RA_OF_ASC_NODE',
+      'ARG_OF_PERICENTER', 'MEAN_ANOMALY'].every(key =>
+      omm[key] !== undefined && omm[key] !== null && omm[key] !== '' &&
+      Number.isFinite(Number(omm[key]))) &&
+    Number(omm.MEAN_MOTION) > 0 &&
+    Number(omm.ECCENTRICITY) >= 0 && Number(omm.ECCENTRICITY) < 1
+  );
 }
 
 /**
@@ -40,16 +54,23 @@ async function fetchGroup(group, baseUrl = CELESTRAK_BASE, param = 'GROUP') {
   const cacheKey = `${param}_${group}`;
   const tsKey    = `tle_timestamp_${cacheKey}`;
   const dataKey  = `tle_data_${cacheKey}`;
-  const cachedTs = parseInt(localStorage.getItem(tsKey) || '0', 10);
+  let cachedTs = 0;
+  try {
+    cachedTs = Number(localStorage.getItem(tsKey));
+  } catch (err) {
+    console.warn('[satellites] Could not read cache timestamp:', err.message);
+  }
   const cachedData = readCachedGroup(dataKey);
 
-  if (Date.now() - cachedTs < CACHE_TTL_MS) {
-    return cachedData || [];
+  if (cachedData && cachedTs > 0 && Date.now() >= cachedTs && Date.now() - cachedTs < CACHE_TTL_MS) {
+    return cachedData;
   }
 
   const url = `${baseUrl}?${param}=${group}&FORMAT=JSON`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) {
       // 403 = over rate limit, 404 = bad group name — return stale cache, do not retry
       console.warn(`[satellites] ${group}: HTTP ${res.status}`);
@@ -57,19 +78,25 @@ async function fetchGroup(group, baseUrl = CELESTRAK_BASE, param = 'GROUP') {
       throw new Error(`Satellite group ${group} unavailable (HTTP ${res.status})`);
     }
     const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) {
-      console.warn(`[satellites] ${group}: empty or non-array response`);
+    if (!isUsableGroup(data)) {
+      console.warn(`[satellites] ${group}: invalid or empty orbital data`);
       if (cachedData) return cachedData;
       throw new Error(`Satellite group ${group} returned no usable data`);
     }
-    localStorage.setItem(dataKey, JSON.stringify(data));
-    localStorage.setItem(tsKey, String(Date.now()));
+    try {
+      localStorage.setItem(dataKey, JSON.stringify(data));
+      localStorage.setItem(tsKey, String(Date.now()));
+    } catch (err) {
+      console.warn(`[satellites] ${group}: could not persist cache —`, err.message);
+    }
     return data;
   } catch (err) {
     // Network failure, JSON parse error, etc. — return stale cache
     console.warn(`[satellites] ${group}: fetch/parse error —`, err.message);
     if (cachedData) return cachedData;
     throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -80,7 +107,7 @@ async function fetchGroup(group, baseUrl = CELESTRAK_BASE, param = 'GROUP') {
  */
 function isImagingLikeOrbit(omm) {
   const inc  = parseFloat(omm.INCLINATION  || 0);
-  const ecc  = parseFloat(omm.ECCENTRICITY || 1);
+  const ecc  = Number(omm.ECCENTRICITY);
   const nRev = parseFloat(omm.MEAN_MOTION  || 0); // rev/day
   if (!nRev) return false;
   const nRads = nRev * 2 * Math.PI / 86400;              // rad/s
@@ -96,6 +123,7 @@ function getLookAnglesDeg(satrec, observerGd, date) {
 
   const posEcf = satellite.eciToEcf(pv.position, gmst);
   const look   = satellite.ecfToLookAngles(observerGd, posEcf);
+  if (!Number.isFinite(look.elevation) || !Number.isFinite(look.azimuth)) return null;
   return {
     azimuthDeg: look.azimuth * (180 / Math.PI),
     elevationDeg: look.elevation * (180 / Math.PI),
@@ -215,25 +243,10 @@ export function getVisibilityState(elevationDeg, altitudeKm) {
   };
 }
 
-async function loadBundledFallbackSnapshot() {
-  try {
-    const res = await fetch(FALLBACK_SNAPSHOT_URL, { cache: 'no-store' });
-    if (!res.ok) return null;
-
-    const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) return null;
-
-    console.warn(`[satellites] using bundled fallback snapshot from ${FALLBACK_SNAPSHOT_URL}`);
-    return data;
-  } catch (_) {
-    return null;
-  }
-}
-
 /**
  * Load all imaging satellite OMM records from CelesTrak.
  * Sources:
- *   confirmed — named imaging operators (regular + supplemental catalogs)
+ *   confirmed — named imaging operators
  *   probable  — military & CubeSat catalogs filtered by imaging-like orbital characteristics
  * Deduplicates by NORAD_CAT_ID; each record gains a `confirmed` boolean.
  * @returns {Promise<object[]>}
@@ -249,17 +262,8 @@ export async function loadImagingSatellites() {
   const failedGroups = [...regularSet.failedGroups, ...probableSet.failedGroups];
 
   if (failedGroups.length > 0) {
-    console.warn(
-      '[satellites] proceeding with partial data; unavailable groups:',
-      failedGroups.map(({ group, reason }) => `${group}: ${reason?.message || String(reason)}`).join(', ')
-    );
-  }
-
-  if (regularResults.length === 0 && probableResults.length === 0) {
-    const fallbackSnapshot = await loadBundledFallbackSnapshot();
-    if (fallbackSnapshot) return fallbackSnapshot;
-
-    throw new Error('All satellite groups were unavailable and no bundled fallback snapshot was found');
+    throw new Error('Incomplete satellite catalog; unavailable groups: ' +
+      failedGroups.map(({ group }) => group).join(', '));
   }
 
   const seen = new Set();
@@ -285,6 +289,7 @@ export async function loadImagingSatellites() {
     }
   }
 
+  if (all.length === 0) throw new Error('Satellite catalog contains no imaging satellites');
   return all;
 }
 
@@ -300,12 +305,15 @@ export function getOverheadSatellites(sats, observerGd) {
   const now    = new Date();
   const nowMs = now.getTime();
   const overhead = [];
+  let propagatedCount = 0;
 
   for (const omm of sats) {
     try {
       const satrec = satellite.json2satrec(omm);
       const lookNow = getLookAnglesDeg(satrec, observerGd, now);
-      if (!lookNow || lookNow.elevationDeg <= 0) continue;
+      if (!lookNow || !Number.isFinite(lookNow.elevationDeg)) continue;
+      propagatedCount++;
+      if (lookNow.elevationDeg <= 0) continue;
 
       const distKm     = Math.sqrt(lookNow.position.x ** 2 + lookNow.position.y ** 2 + lookNow.position.z ** 2);
       const altitudeKm = distKm - R_EARTH_KM;
@@ -335,11 +343,12 @@ export function getOverheadSatellites(sats, observerGd) {
         inFOV:   visibility.inFOV,
         nearby:  visibility.nearby,
       });
-    } catch (_) {
-      // Bad orbital elements — skip silently
+    } catch (err) {
+      console.warn(`[satellites] Could not propagate ${omm.NORAD_CAT_ID}:`, err.message);
     }
   }
 
+  if (propagatedCount === 0) throw new Error('No satellite positions could be calculated');
   return overhead;
 }
 
